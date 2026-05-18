@@ -1,23 +1,31 @@
 package;
 
 import debug.FPSCounter;
-
-import flixel.graphics.FlxGraphic;
+import flixel.FlxG;
 import flixel.FlxGame;
 import flixel.FlxState;
+import flixel.graphics.FlxGraphic;
 import haxe.io.Path;
+import lime.app.Application;
+import lime.system.System as LimeSystem;
+import mobile.backend.MobileScaleMode;
 import openfl.Assets;
 import openfl.Lib;
 import openfl.display.Sprite;
-import openfl.events.Event;
+import openfl.display.StageAlign;
+import openfl.display.StageQuality;
 import openfl.display.StageScaleMode;
-import lime.system.System as LimeSystem;
-import lime.app.Application;
-import states.TitleState;
-import mobile.backend.MobileScaleMode;
+import openfl.events.Event;
 import openfl.events.KeyboardEvent;
+import openfl.system.System;
+import states.TitleState;
+
 #if COPYSTATE_ALLOWED
 import states.CopyState;
+#end
+
+#if DISCORD_ALLOWED
+import backend.DiscordClient;
 #end
 
 #if linux
@@ -25,130 +33,168 @@ import lime.graphics.Image;
 
 @:cppInclude('./external/gamemode_client.h')
 @:cppFileCode('
-	#define GAMEMODE_AUTO
+#define GAMEMODE_AUTO
 ')
 #end
 
 class Main extends Sprite
 {
-	var game = {
-		width: 1280, // WINDOW width
-		height: 720, // WINDOW height
-		initialState: TitleState, // initial game state
-		zoom: -1.0, // game state bounds
-		framerate: 60, // default framerate
-		skipSplash: true, // if the default flixel splash screen should be skipped
-		startFullscreen: false // if the game should start at fullscreen mode
-	};
-
+	public static var instance:Main;
 	public static var fpsVar:FPSCounter;
 
+	public static inline var ENGINE_NAME:String = "CoreX Engine";
+	public static inline var ENGINE_VERSION:String = "0.3.0";
+
 	#if mobile
-	public static final platform:String = "Phones";
+	public static final platform:String = "Mobile";
 	#else
-	public static final platform:String = "PCs";
+	public static final platform:String = "Desktop";
 	#end
 
-	// You can pretty much ignore everything from here on - your code should go in your states.
+	public var gameSettings:Dynamic = {
+		width: 1280,
+		height: 720,
+		initialState: TitleState,
+		zoom: -1.0,
+		framerate: 120,
+		skipSplash: true,
+		startFullscreen: false
+	};
 
 	public static function main():Void
 	{
 		Lib.current.addChild(new Main());
+
 		#if cpp
-        cpp.NativeGc.enable(true);
-        cpp.NativeGc.run(true);
-        #end
+		cpp.NativeGc.enable(true);
+		cpp.NativeGc.run(true);
+		cpp.vm.Gc.enable(true);
+		#end
 	}
 
 	public function new()
 	{
 		super();
+
+		instance = this;
+
 		#if mobile
 		#if android
 		StorageUtil.requestPermissions();
 		#end
+
 		Sys.setCwd(StorageUtil.getStorageDirectory());
 		#end
+
 		backend.CrashHandler.init();
 
 		#if windows
-		@:functionCode("
-		#include <windows.h>
-		#include <winuser.h>
-		setProcessDPIAware() // allows for more crisp visuals
-		DisableProcessWindowsGhosting() // lets you move the window and such if it's not responding
-		")
+		@:functionCode('
+		SetProcessDPIAware();
+		DisableProcessWindowsGhosting();
+		timeBeginPeriod(1);
+		')
 		#end
 
 		if (stage != null)
-		{
-			init();
-		}
+			initialize();
 		else
-		{
-			addEventListener(Event.ADDED_TO_STAGE, init);
-		}
+			addEventListener(Event.ADDED_TO_STAGE, initialize);
 	}
 
-	private function init(?E:Event):Void
+	function initialize(?event:Event):Void
 	{
-		if (hasEventListener(Event.ADDED_TO_STAGE))
-		{
-			removeEventListener(Event.ADDED_TO_STAGE, init);
-		}
+		removeEventListener(Event.ADDED_TO_STAGE, initialize);
 
+		setupStage();
 		setupGame();
+		setupSignals();
+		setupPlatform();
 	}
 
-	private function setupGame():Void
+	function setupStage():Void
+	{
+		stage.align = StageAlign.TOP_LEFT;
+		stage.scaleMode = StageScaleMode.NO_SCALE;
+		stage.quality = StageQuality.BEST;
+		stage.frameRate = gameSettings.framerate;
+	}
+
+	function setupGame():Void
 	{
 		#if (openfl <= "9.2.0")
 		var stageWidth:Int = Lib.current.stage.stageWidth;
 		var stageHeight:Int = Lib.current.stage.stageHeight;
 
-		if (game.zoom == -1.0)
+		if (gameSettings.zoom == -1.0)
 		{
-			var ratioX:Float = stageWidth / game.width;
-			var ratioY:Float = stageHeight / game.height;
-			game.zoom = Math.min(ratioX, ratioY);
-			game.width = Math.ceil(stageWidth / game.zoom);
-			game.height = Math.ceil(stageHeight / game.zoom);
+			var ratioX:Float = stageWidth / gameSettings.width;
+			var ratioY:Float = stageHeight / gameSettings.height;
+
+			gameSettings.zoom = Math.min(ratioX, ratioY);
+
+			gameSettings.width = Math.ceil(stageWidth / gameSettings.zoom);
+			gameSettings.height = Math.ceil(stageHeight / gameSettings.zoom);
 		}
 		#else
-		if (game.zoom == -1.0)
-			game.zoom = 1.0;
+		if (gameSettings.zoom == -1.0)
+			gameSettings.zoom = 1.0;
 		#end
-	
-		#if LUA_ALLOWED Lua.set_callbacks_function(cpp.Callable.fromStaticFunction(psychlua.CallbackHandler.call)); #end
+
+		#if LUA_ALLOWED
+		Lua.set_callbacks_function(cpp.Callable.fromStaticFunction(psychlua.CallbackHandler.call));
+		#end
+
 		Controls.instance = new Controls();
+
 		ClientPrefs.loadDefaultKeys();
-		#if ACHIEVEMENTS_ALLOWED Achievements.load(); #end
-		addChild(new FlxGame(game.width, game.height, #if COPYSTATE_ALLOWED !CopyState.checkExistingFiles() ? CopyState : #end game.initialState, #if (flixel < "5.0.0") game.zoom, #end game.framerate, game.framerate, game.skipSplash, game.startFullscreen));
 
-		fpsVar = new FPSCounter(10, 3, 0xFFFFFF);
+		#if ACHIEVEMENTS_ALLOWED
+		Achievements.load();
+		#end
+
+		addChild(new FlxGame(
+			gameSettings.width,
+			gameSettings.height,
+			#if COPYSTATE_ALLOWED
+			!CopyState.checkExistingFiles() ? CopyState :
+			#end
+			gameSettings.initialState,
+			#if (flixel < "5.0.0")
+			gameSettings.zoom,
+			#end
+			gameSettings.framerate,
+			gameSettings.framerate,
+			gameSettings.skipSplash,
+			gameSettings.startFullscreen
+		));
+
+		setupFPS();
+	}
+
+	function setupFPS():Void
+	{
+		fpsVar = new FPSCounter(12, 6, 0xFFFFFFFF);
 		addChild(fpsVar);
-		Lib.current.stage.align = "tl";
-		Lib.current.stage.scaleMode = StageScaleMode.NO_SCALE;
-		if(fpsVar != null) {
-			fpsVar.visible = ClientPrefs.data.showFPS;
-		}
 
+		if (fpsVar != null)
+			fpsVar.visible = ClientPrefs.data.showFPS;
+	}
+
+	function setupPlatform():Void
+	{
 		#if linux
 		var icon = Image.fromFile("icon.png");
 		Lib.current.stage.window.setIcon(icon);
 		#end
 
 		#if desktop
-		FlxG.stage.addEventListener(KeyboardEvent.KEY_UP, toggleFullScreen);
+		FlxG.stage.addEventListener(KeyboardEvent.KEY_UP, onKeyUp);
 		#end
 
 		#if html5
 		FlxG.autoPause = false;
 		FlxG.mouse.visible = false;
-		#end
-
-		#if DISCORD_ALLOWED
-		DiscordClient.prepare();
 		#end
 
 		#if android
@@ -160,31 +206,72 @@ class Main extends Sprite
 		FlxG.scaleMode = new MobileScaleMode();
 		#end
 
-		// shader coords fix
-		FlxG.signals.gameResized.add(function (w, h) {
-			if(fpsVar != null)
-				fpsVar.positionFPS(10, 3, Math.min(Lib.current.stage.stageWidth / FlxG.width, Lib.current.stage.stageHeight / FlxG.height));
-		     if (FlxG.cameras != null) {
-			   for (cam in FlxG.cameras.list) {
-				if (cam != null && cam.filters != null)
-					resetSpriteCache(cam.flashSprite);
-			   }
-			}
+		#if DISCORD_ALLOWED
+		DiscordClient.prepare();
+		#end
+	}
 
-			if (FlxG.game != null)
-			resetSpriteCache(FlxG.game);
+	function setupSignals():Void
+	{
+		FlxG.signals.gameResized.add(onResize);
+
+		Application.current.window.onFocusIn.add(function()
+		{
+			FlxG.drawFramerate = gameSettings.framerate;
+			FlxG.updateFramerate = gameSettings.framerate;
+		});
+
+		Application.current.window.onFocusOut.add(function()
+		{
+			FlxG.drawFramerate = 60;
+			FlxG.updateFramerate = 60;
 		});
 	}
 
-	static function resetSpriteCache(sprite:Sprite):Void {
-		@:privateAccess {
-		        sprite.__cacheBitmap = null;
+	function onResize(width:Int, height:Int):Void
+	{
+		if (fpsVar != null)
+		{
+			fpsVar.positionFPS(
+				12,
+				6,
+				Math.min(
+					Lib.current.stage.stageWidth / FlxG.width,
+					Lib.current.stage.stageHeight / FlxG.height
+				)
+			);
+		}
+
+		if (FlxG.cameras != null)
+		{
+			for (camera in FlxG.cameras.list)
+			{
+				if (camera != null && camera.filters != null)
+					resetSpriteCache(camera.flashSprite);
+			}
+		}
+
+		if (FlxG.game != null)
+			resetSpriteCache(FlxG.game);
+
+		System.gc();
+	}
+
+	static function resetSpriteCache(sprite:Sprite):Void
+	{
+		@:privateAccess
+		{
+			sprite.__cacheBitmap = null;
 			sprite.__cacheBitmapData = null;
 		}
 	}
 
-	function toggleFullScreen(event:KeyboardEvent){
-		if(Controls.instance.justReleased('fullscreen'))
+	function onKeyUp(event:KeyboardEvent):Void
+	{
+		if (Controls.instance.justReleased('fullscreen'))
 			FlxG.fullscreen = !FlxG.fullscreen;
+
+		if (Controls.instance.justReleased('debug_1'))
+			fpsVar.visible = !fpsVar.visible;
 	}
 }
