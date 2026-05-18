@@ -1,12 +1,25 @@
 package backend;
 
+import haxe.Json;
+import haxe.io.Path;
+
 import lime.utils.Assets;
 import openfl.utils.Assets as OpenFlAssets;
-import haxe.Json;
+
+#if MODS_ALLOWED
+import sys.FileSystem;
+import sys.io.File;
+#end
+
+typedef WeekSong =
+{
+	var name:String;
+	var icon:String;
+	var color:Array<Int>;
+}
 
 typedef WeekFile =
 {
-	// JSON variables
 	var songs:Array<Dynamic>;
 	var weekCharacters:Array<String>;
 	var weekBackground:String;
@@ -19,180 +32,364 @@ typedef WeekFile =
 	var hideStoryMode:Bool;
 	var hideFreeplay:Bool;
 	var difficulties:String;
+
+	@:optional var weekBanner:String;
+	@:optional var weekLogo:String;
+	@:optional var weekDescription:String;
+	@:optional var disableFreeplayIcon:Bool;
+	@:optional var weekMusic:String;
+	@:optional var menuStyle:String;
+	@:optional var weekColor:String;
+	@:optional var version:String;
+	@:optional var mod:String;
 }
 
-class WeekData {
-	public static var weeksLoaded:Map<String, WeekData> = new Map<String, WeekData>();
+class WeekData
+{
+	public static var weeksLoaded:Map<String, WeekData> = [];
 	public static var weeksList:Array<String> = [];
-	public var folder:String = '';
-	
-	// JSON variables
-	public var songs:Array<Dynamic>;
-	public var weekCharacters:Array<String>;
-	public var weekBackground:String;
-	public var weekBefore:String;
-	public var storyName:String;
-	public var weekName:String;
-	public var freeplayColor:Array<Int>;
-	public var startUnlocked:Bool;
-	public var hiddenUntilUnlocked:Bool;
-	public var hideStoryMode:Bool;
-	public var hideFreeplay:Bool;
-	public var difficulties:String;
 
-	public var fileName:String;
+	public static var invalidWeeks:Array<String> = [];
 
-	public static function createWeekFile():WeekFile {
-		var weekFile:WeekFile = {
-			songs: [["Bopeebo", "dad", [146, 113, 253]], ["Fresh", "dad", [146, 113, 253]], ["Dad Battle", "dad", [146, 113, 253]]],
-			weekCharacters: ['dad', 'bf', 'gf'],
-			weekBackground: 'stage',
-			weekBefore: 'tutorial',
-			storyName: 'Your New Week',
-			weekName: 'Custom Week',
+	public var folder:String = "";
+	public var fileName:String = "";
+
+	public var songs:Array<Dynamic> = [];
+	public var weekCharacters:Array<String> = [];
+	public var weekBackground:String = "stage";
+	public var weekBefore:String = "";
+	public var storyName:String = "Story";
+	public var weekName:String = "Custom Week";
+	public var freeplayColor:Array<Int> = [146, 113, 253];
+	public var startUnlocked:Bool = true;
+	public var hiddenUntilUnlocked:Bool = false;
+	public var hideStoryMode:Bool = false;
+	public var hideFreeplay:Bool = false;
+	public var difficulties:String = "";
+
+	public var weekBanner:String = "";
+	public var weekLogo:String = "";
+	public var weekDescription:String = "";
+	public var disableFreeplayIcon:Bool = false;
+	public var weekMusic:String = "";
+	public var menuStyle:String = "default";
+	public var weekColor:String = "#FFFFFF";
+	public var version:String = "1.0";
+	public var mod:String = "";
+
+	public function new(data:WeekFile, file:String)
+	{
+		loadData(data);
+
+		fileName = file;
+	}
+
+	function loadData(data:WeekFile):Void
+	{
+		for (field in Reflect.fields(data))
+		{
+			if (Reflect.hasField(this, field))
+			{
+				Reflect.setProperty(
+					this,
+					field,
+					Reflect.getProperty(data, field)
+				);
+			}
+		}
+	}
+
+	public static function createWeekFile():WeekFile
+	{
+		return {
+			songs: [
+				["Bopeebo", "dad", [146, 113, 253]],
+				["Fresh", "dad", [146, 113, 253]],
+				["Dad Battle", "dad", [146, 113, 253]]
+			],
+
+			weekCharacters: ["dad", "bf", "gf"],
+
+			weekBackground: "stage",
+			weekBefore: "tutorial",
+
+			storyName: "Your New Week",
+			weekName: "Custom Week",
+
 			freeplayColor: [146, 113, 253],
+
 			startUnlocked: true,
 			hiddenUntilUnlocked: false,
+
 			hideStoryMode: false,
 			hideFreeplay: false,
-			difficulties: ''
+
+			difficulties: "",
+
+			weekBanner: "",
+			weekLogo: "",
+			weekDescription: "A custom week.",
+			disableFreeplayIcon: false,
+			weekMusic: "",
+			menuStyle: "default",
+			weekColor: "#FFFFFF",
+			version: "1.0",
+			mod: ""
 		};
-		return weekFile;
 	}
 
-	// HELP: Is there any way to convert a WeekFile to WeekData without having to put all variables there manually? I'm kind of a noob in haxe lmao
-	public function new(weekFile:WeekFile, fileName:String) {
-		// here ya go - MiguelItsOut
-		for (field in Reflect.fields(weekFile))
-			if(Reflect.fields(this).contains(field)) // Reflect.hasField() won't fucking work :/
-				Reflect.setProperty(this, field, Reflect.getProperty(weekFile, field));
-
-		this.fileName = fileName;
-	}
-
-	public static function reloadWeekFiles(isStoryMode:Null<Bool> = false)
+	public static function reloadWeekFiles(?isStoryMode:Null<Bool> = false):Void
 	{
-		weeksList = [];
 		weeksLoaded.clear();
+		weeksList = [];
+		invalidWeeks = [];
+
+		var directories:Array<String> = [];
+		var originalLength:Int = 0;
+
 		#if MODS_ALLOWED
-		var directories:Array<String> = [Paths.mods(), Paths.getSharedPath()];
-		var originalLength:Int = directories.length;
+
+		directories = [
+			Paths.mods(),
+			Paths.getSharedPath()
+		];
+
+		originalLength = directories.length;
 
 		for (mod in Mods.parseList().enabled)
-			directories.push(Paths.mods(mod + '/'));
+			directories.push(Paths.mods(mod + "/"));
+
 		#else
-		var directories:Array<String> = [Paths.getSharedPath()];
-		var originalLength:Int = directories.length;
+
+		directories = [Paths.getSharedPath()];
+		originalLength = directories.length;
+
 		#end
 
-		var sexList:Array<String> = CoolUtil.coolTextFile(Paths.getSharedPath('weeks/weekList.txt'));
-		for (i in 0...sexList.length) {
-			for (j in 0...directories.length) {
-				var fileToCheck:String = directories[j] + 'weeks/' + sexList[i] + '.json';
-				if(!weeksLoaded.exists(sexList[i])) {
-					var week:WeekFile = getWeekFile(fileToCheck);
-					if(week != null) {
-						var weekFile:WeekData = new WeekData(week, sexList[i]);
-
-						#if MODS_ALLOWED
-						if(j >= originalLength) {
-							weekFile.folder = directories[j].substring(Paths.mods().length, directories[j].length-1);
-						}
-						#end
-
-						if(weekFile != null && (isStoryMode == null || (isStoryMode && !weekFile.hideStoryMode) || (!isStoryMode && !weekFile.hideFreeplay))) {
-							weeksLoaded.set(sexList[i], weekFile);
-							weeksList.push(sexList[i]);
-						}
-					}
-				}
-			}
-		}
-
-		#if MODS_ALLOWED
-		for (i in 0...directories.length) {
-			var directory:String = directories[i] + 'weeks/';
-			if(FileSystem.exists(directory)) {
-				var listOfWeeks:Array<String> = CoolUtil.coolTextFile(directory + 'weekList.txt');
-				for (daWeek in listOfWeeks)
-				{
-					var path:String = directory + daWeek + '.json';
-					if(FileSystem.exists(path))
-					{
-						addWeek(daWeek, path, directories[i], i, originalLength);
-					}
-				}
-
-				for (file in Paths.readDirectory(directory))
-				{
-					var path = haxe.io.Path.join([directory, file]);
-					if (!FileSystem.isDirectory(path) && file.endsWith('.json'))
-					{
-						addWeek(file.substr(0, file.length - 5), path, directories[i], i, originalLength);
-					}
-				}
-			}
-		}
-		#end
-	}
-
-	private static function addWeek(weekToCheck:String, path:String, directory:String, i:Int, originalLength:Int)
-	{
-		if(!weeksLoaded.exists(weekToCheck))
+		for (directory in directories)
 		{
-			var week:WeekFile = getWeekFile(path);
-			if(week != null)
-			{
-				var weekFile:WeekData = new WeekData(week, weekToCheck);
-				if(i >= originalLength)
-				{
-					#if MODS_ALLOWED
-					weekFile.folder = directory.substring(Paths.mods().length, directory.length-1);
-					#end
-				}
-				if((PlayState.isStoryMode && !weekFile.hideStoryMode) || (!PlayState.isStoryMode && !weekFile.hideFreeplay))
-				{
-					weeksLoaded.set(weekToCheck, weekFile);
-					weeksList.push(weekToCheck);
-				}
-			}
+			loadWeeksFromDirectory(
+				directory,
+				isStoryMode,
+				originalLength
+			);
 		}
+
+		sortWeeks();
 	}
 
-	private static function getWeekFile(path:String):WeekFile {
-		var rawJson:String = null;
+	static function loadWeeksFromDirectory(
+		directory:String,
+		isStoryMode:Null<Bool>,
+		originalLength:Int
+	):Void
+	{
+		var weeksPath:String = directory + "weeks/";
+
 		#if MODS_ALLOWED
-		if(FileSystem.exists(path)) {
-			rawJson = File.getContent(path);
-		}
-		#else
-		if(OpenFlAssets.exists(path)) {
-			rawJson = Assets.getText(path);
+		if (!FileSystem.exists(weeksPath))
+			return;
+		#end
+
+		var weekList:Array<String> = [];
+
+		var listPath:String = weeksPath + "weekList.txt";
+
+		if (exists(listPath))
+			weekList = CoolUtil.coolTextFile(listPath);
+
+		#if MODS_ALLOWED
+		for (file in Paths.readDirectory(weeksPath))
+		{
+			if (file.endsWith(".json"))
+			{
+				var weekName:String =
+					file.substr(0, file.length - 5);
+
+				if (!weekList.contains(weekName))
+					weekList.push(weekName);
+			}
 		}
 		#end
 
-		if(rawJson != null && rawJson.length > 0) {
+		for (weekName in weekList)
+		{
+			var path:String = weeksPath + weekName + ".json";
+
+			if (!exists(path))
+				continue;
+
+			loadWeek(
+				weekName,
+				path,
+				directory,
+				isStoryMode,
+				originalLength
+			);
+		}
+	}
+
+	static function loadWeek(
+		name:String,
+		path:String,
+		directory:String,
+		isStoryMode:Null<Bool>,
+		originalLength:Int
+	):Void
+	{
+		if (weeksLoaded.exists(name))
+			return;
+
+		var file:WeekFile = getWeekFile(path);
+
+		if (file == null)
+		{
+			invalidWeeks.push(name);
+			return;
+		}
+
+		var data:WeekData = new WeekData(file, name);
+
+		#if MODS_ALLOWED
+		if (directory != Paths.getSharedPath())
+		{
+			data.folder = directory.substring(
+				Paths.mods().length,
+				directory.length - 1
+			);
+		}
+		#end
+
+		if (!canLoadWeek(data, isStoryMode))
+			return;
+
+		weeksLoaded.set(name, data);
+		weeksList.push(name);
+	}
+
+	static function canLoadWeek(
+		data:WeekData,
+		isStoryMode:Null<Bool>
+	):Bool
+	{
+		if (isStoryMode == null)
+			return true;
+
+		if (isStoryMode)
+			return !data.hideStoryMode;
+
+		return !data.hideFreeplay;
+	}
+
+	static function sortWeeks():Void
+	{
+		weeksList.sort(function(a, b)
+		{
+			return Reflect.compare(a.toLowerCase(), b.toLowerCase());
+		});
+	}
+
+	public static function getWeekFile(path:String):WeekFile
+	{
+		var rawJson:String = null;
+
+		#if MODS_ALLOWED
+		if (FileSystem.exists(path))
+			rawJson = File.getContent(path);
+		#else
+		if (OpenFlAssets.exists(path))
+			rawJson = Assets.getText(path);
+		#end
+
+		if (rawJson == null || rawJson.trim().length < 1)
+			return null;
+
+		try
+		{
 			return cast tjson.TJSON.parse(rawJson);
 		}
-		return null;
+		catch (e:Dynamic)
+		{
+			return null;
+		}
 	}
 
-	//   FUNCTIONS YOU WILL PROBABLY NEVER NEED TO USE
+	public static function exists(path:String):Bool
+	{
+		#if MODS_ALLOWED
+		return FileSystem.exists(path);
+		#else
+		return OpenFlAssets.exists(path);
+		#end
+	}
 
-	//To use on PlayState.hx or Highscore stuff
-	public static function getWeekFileName():String {
+	public static function getWeekFileName():String
+	{
 		return weeksList[PlayState.storyWeek];
 	}
 
-	//Used on LoadingState, nothing really too relevant
-	public static function getCurrentWeek():WeekData {
-		return weeksLoaded.get(weeksList[PlayState.storyWeek]);
+	public static function getCurrentWeek():WeekData
+	{
+		return weeksLoaded.get(
+			weeksList[PlayState.storyWeek]
+		);
 	}
 
-	public static function setDirectoryFromWeek(?data:WeekData = null) {
-		Mods.currentModDirectory = '';
-		if(data != null && data.folder != null && data.folder.length > 0) {
+	public static function getWeek(name:String):WeekData
+	{
+		return weeksLoaded.get(name);
+	}
+
+	public static function weekExists(name:String):Bool
+	{
+		return weeksLoaded.exists(name);
+	}
+
+	public static function setDirectoryFromWeek(?data:WeekData = null):Void
+	{
+		Mods.currentModDirectory = "";
+
+		if (data != null
+			&& data.folder != null
+			&& data.folder.length > 0)
+		{
 			Mods.currentModDirectory = data.folder;
 		}
+	}
+
+	public static function getWeekColor(data:WeekData):Int
+	{
+		if (data == null)
+			return 0xFFFFFFFF;
+
+		if (data.freeplayColor == null
+			|| data.freeplayColor.length < 3)
+		{
+			return 0xFFFFFFFF;
+		}
+
+		return flixel.util.FlxColor.fromRGB(
+			data.freeplayColor[0],
+			data.freeplayColor[1],
+			data.freeplayColor[2]
+		);
+	}
+
+	public function getSongs():Array<String>
+	{
+		var list:Array<String> = [];
+
+		for (song in songs)
+		{
+			if (song != null && song.length > 0)
+				list.push(song[0]);
+		}
+
+		return list;
+	}
+
+	public function getCharacters():Array<String>
+	{
+		return weekCharacters.copy();
 	}
 }
